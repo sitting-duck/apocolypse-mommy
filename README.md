@@ -2,6 +2,8 @@
 
 FastAPI + python-telegram-bot (v21), **Ollama** for LLM, **ngrok** for the public webhook, and a tiny **affiliate catalog** that suggests links after replies. It also includes scripts so you don’t have to memorize commands.
 
+<img width="376" height="599" alt="image" src="https://github.com/user-attachments/assets/4270832a-df1c-472e-9449-c865757d1fd7" />
+
 ---
 
 ## 0) What you get
@@ -17,6 +19,21 @@ FastAPI + python-telegram-bot (v21), **Ollama** for LLM, **ngrok** for the publi
 
 ## 1) Prereqs (one-time)
 
+### Create new bot in Telegram
+<img width="385" height="632" alt="image" src="https://github.com/user-attachments/assets/c1857b1e-f81b-4821-bea0-14b62b755b9f" /> <br>
+Search for @BotFather to begin a chat with BotFather. You can interact with BotFather to create your own bots. <br> 
+Once you find BotFather click the Open button pictured above <br>
+<br>
+<img width="394" height="542" alt="image" src="https://github.com/user-attachments/assets/8cdba8a5-6c51-4435-a7c1-a78a259b77bc" /> <br>
+Click the "Create a New Bot" button pictured above. <br>
+<br>
+<img width="406" height="692" alt="image" src="https://github.com/user-attachments/assets/e1cdaec4-b443-4d14-83c7-4eee1d5e9254" /> <br>
+Fill out the form and click the "Create Bot" button pictured above. <br>
+<br> 
+<img width="401" height="442" alt="image" src="https://github.com/user-attachments/assets/3765bff1-fa9e-4722-b2e2-a4b6db7ef703" /><br>
+Click the copy button to copy your telegram bot token. We are going to create a Github Secret for this secret token. It is a character string that should NOT be pasted into your source code. That is a security vulnerability. <br>
+
+### Installs
 ```bash
 # If you don’t have Homebrew yet:
 # /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"

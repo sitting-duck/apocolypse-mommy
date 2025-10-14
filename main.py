@@ -1,6 +1,5 @@
 # main.py — FastAPI webhook + python-telegram-bot v21 + Ollama (streaming)
-#         + affiliate suggester + topic nudge (/topics)
-
+#         + affiliate suggester + smart topic gate (/topics, safety redirect)
 import os, json, logging
 from time import monotonic
 from contextlib import asynccontextmanager
@@ -13,7 +12,13 @@ from telegram.error import BadRequest
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
 from affiliate_catalog import find_matches, preset_for_scenario
-from topic_gate import is_off_topic, nudge_text, format_topics_list  # NEW
+from topic_gate import (
+    is_prep_related,
+    needs_safety_redirect,
+    nudge_text,
+    format_topics_list,
+    safety_redirect_text,
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -26,6 +31,7 @@ WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 OLLAMA_URL     = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL   = os.environ.get("OLLAMA_MODEL", "qwen2.5")
 
+# Speed/perf knobs
 NUM_PREDICT = int(os.environ.get("NUM_PREDICT", "220"))
 NUM_CTX     = int(os.environ.get("NUM_CTX", "2048"))
 KEEP_ALIVE  = os.environ.get("KEEP_ALIVE", "30m")
@@ -42,7 +48,10 @@ async def stream_ollama(prompt: str, sys_prompt: str | None = None):
             + [{"role": "user", "content": prompt}]
         ),
         "stream": True,
-        "options": {"num_predict": NUM_PREDICT, "num_ctx": NUM_CTX},
+        "options": {
+            "num_predict": NUM_PREDICT,
+            "num_ctx": NUM_CTX,
+        },
         "keep_alive": KEEP_ALIVE,
     }
     async with httpx.AsyncClient(timeout=None) as client:
@@ -68,6 +77,7 @@ async def edit_throttled(
     last_text: str,
     min_interval: float = 0.25,
 ):
+    """Edit no more than ~4/s and only if text changed; show last 4096 chars while streaming."""
     display = new_full_text if len(new_full_text) <= MAX_LEN else new_full_text[-MAX_LEN:]
     if display == last_text:
         return last_edit_time, last_text
@@ -88,6 +98,7 @@ async def send_final(
     full_text: str,
     last_text: str,
 ):
+    """Finalize the streamed message; split into multiple messages if >4096."""
     first = (full_text[:MAX_LEN] or "…")
     if first != last_text:
         try:
@@ -105,6 +116,7 @@ def _fmt_aff_line(item) -> str:
     return f"• {item.title}\n  {item.url}"
 
 async def maybe_suggest_affiliates(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Suggest 1–3 relevant catalog items after a normal reply (non-spammy)."""
     user_msg = (update.message.text or "").lower()
     matches = find_matches(user_msg, max_items=2)
     presets = preset_for_scenario(user_msg)
@@ -145,15 +157,20 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     chat_id = update.effective_chat.id
 
-    # 🔹 Off-topic gate: gently nudge instead of calling the model
-    if is_off_topic(user_text):
+    # 1) Safety redirect (lawful, non-harmful scope)
+    if needs_safety_redirect(user_text):
+        await update.message.reply_text(safety_redirect_text(), disable_web_page_preview=True)
+        return
+
+    # 2) Smart topic gate (preparedness + fieldcraft + lawful hunting/martial arts)
+    if not is_prep_related(user_text):
         await update.message.reply_text(nudge_text(), disable_web_page_preview=True)
         return
 
-    # Show typing…
+    # 3) Show typing…
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    # Placeholder message to edit as we stream
+    # 4) Placeholder to stream into
     msg = await update.message.reply_text("…")
     buffer = ""
     last_edit = 0.0
@@ -162,17 +179,23 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         async for chunk in stream_ollama(
             user_text,
-            sys_prompt="You are a helpful, concise assistant replying for a Telegram bot."
+            sys_prompt=(
+                "You are Honey, a concise preparedness & fieldcraft assistant. "
+                "Provide lawful, safety-first guidance only. Avoid tactics that enable harm; "
+                "focus on planning, checklists, safety, legal compliance, fitness, awareness, "
+                "off-grid info, communications, first-aid basics, ethical/regulated hunting guidance. "
+                "Be brief and practical; 3–7 bullets and a one-line summary."
+            )
         ):
             buffer += chunk
             last_edit, last_text = await edit_throttled(
                 context, chat_id, msg.message_id, buffer, last_edit, last_text
             )
 
-        # Final LLM reply flush
+        # 5) Finalize stream
         await send_final(context, chat_id, msg.message_id, buffer or "No response.", last_text)
 
-        # After replying, lightly suggest affiliate links if relevant
+        # 6) Light affiliate suggestions
         await maybe_suggest_affiliates(update, context)
 
     except Exception as e:

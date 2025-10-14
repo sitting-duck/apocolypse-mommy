@@ -2,7 +2,29 @@
 from __future__ import annotations
 import re
 
-# --- Core preparedness + fieldcraft signals ---
+# ------------------------------------------------------------
+# Tokenization helpers
+# ------------------------------------------------------------
+# Safe word extractor: start with a letter, then letters / apostrophes / hyphens.
+# Hyphen is placed at the end of the class to avoid "bad character range" errors.
+_WORD_RE = re.compile(r"[A-Za-z][A-Za-z’'-]+")  # allows straight/curly apostrophes and hyphens
+
+def _normalize(text: str) -> str:
+    """Lowercase and keep simple word-like tokens."""
+    return " ".join(_WORD_RE.findall((text or "").lower()))
+
+def _contains_phrase(text: str, phrases: list[str]) -> bool:
+    t = (text or "").lower()
+    return any(p in t for p in phrases)
+
+def _has_any(text: str, terms: list[str]) -> bool:
+    t = (text or "").lower()
+    return any(term in t for term in terms)
+
+# ------------------------------------------------------------
+# Scope configuration
+# ------------------------------------------------------------
+# Core preparedness + fieldcraft signals (single tokens)
 CORE_TOKENS = {
     # hazards & scenarios
     "blackout","power","outage","storm","hurricane","tornado","earthquake","wildfire",
@@ -21,19 +43,19 @@ CORE_TOKENS = {
     "gobag","go","bag","bug","out","72-hour","checklist","kit","preparedness","survival","responder",
 }
 
-# --- Accept phases that are clearly preparedness-adjacent ---
+# Explicit phrases that are clearly preparedness-adjacent
 ACCEPT_PHRASES = [
     # off-grid / no-internet
     "no internet","without internet","offline only","off grid","off-grid","grid down","grid-down",
     # info & reference
     "paper maps","print resources","reference library","book list","field manual",
-    # hunting (w/ safety/legal framing expected later)
+    # hunting (safety/legal framing encouraged)
     "hunting safety","hunter education","ethical hunting","wild game processing basics",
     # martial arts (fitness/awareness framing)
     "martial arts conditioning","martial arts for fitness","de-escalation","situational awareness",
 ]
 
-# --- Sensitive areas that require safety/legal framing ---
+# Sensitive areas that require safety/legal framing
 SENSITIVE_TOPICS = [
     # weapons / martial arts broad terms
     "weapon","weapons","firearm","firearms","gun","guns","knife","knives","martial arts","mma","combat",
@@ -42,7 +64,7 @@ SENSITIVE_TOPICS = [
     "hunting","bow","archery","rifle","shotgun","trap","snare",
 ]
 
-# If a sensitive term appears, allow through only when these qualifiers are present
+# Qualifiers that legitimize sensitive topics (safety-first, legal)
 SAFETY_QUALIFIERS = [
     "safety","safe","legal","lawful","ethics","ethical","rules","storage","handling",
     "training","certified","education","awareness","de-escalation","avoid","prevent","nonviolent",
@@ -61,18 +83,9 @@ RISKY_TERMS = [
     "surveillance device","poison","lure animal illegally","snare without permit",
 ]
 
-_word = re.compile(r"[a-zA-Z][a-zA-Z\\-']+")
-def _normalize(text: str) -> str:
-    return " ".join(_word.findall(text.lower()))
-
-def _contains_phrase(text: str, phrases: list[str]) -> bool:
-    t = text.lower()
-    return any(p in t for p in phrases)
-
-def _has_any(text: str, terms: list[str]) -> bool:
-    t = text.lower()
-    return any(term in t for term in terms)
-
+# ------------------------------------------------------------
+# Public API
+# ------------------------------------------------------------
 def is_prep_related(text: str) -> bool:
     """
     Accept if:
@@ -154,5 +167,4 @@ def safety_redirect_text() -> str:
         "• Off-grid readiness: comms, power, first aid, water, and printed references\n\n"
         "Try rephrasing with a **safety/legal** focus (e.g., “hunting **safety & ethics**”)."
     )
-
 

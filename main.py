@@ -1,7 +1,5 @@
-# main.py — FastAPI webhook + python-telegram-bot v21
-# - Streams from Ollama (tries /api/chat, falls back to /api/generate on 404)
-# - Light affiliate-link suggestions + /buy command
-
+# main.py — FastAPI webhook + python-telegram-bot v21 + Ollama (streaming)
+#         + affiliate suggester + smart topic gate (/topics, safety redirect)
 import os, json, logging
 from time import monotonic
 from contextlib import asynccontextmanager
@@ -13,8 +11,14 @@ from telegram.constants import ChatAction
 from telegram.error import BadRequest
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
-# Affiliate catalog (local, manual links)
 from affiliate_catalog import find_matches, preset_for_scenario
+from topic_gate import (
+    is_prep_related,
+    needs_safety_redirect,
+    nudge_text,
+    format_topics_list,
+    safety_redirect_text,
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -27,66 +31,37 @@ WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 OLLAMA_URL     = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL   = os.environ.get("OLLAMA_MODEL", "qwen2.5")
 
-# Speed/perf knobs (tune to taste)
-NUM_PREDICT = int(os.environ.get("NUM_PREDICT", "220"))  # max tokens to generate
-NUM_CTX     = int(os.environ.get("NUM_CTX", "2048"))     # context window tokens
-KEEP_ALIVE  = os.environ.get("KEEP_ALIVE", "30m")        # keep model loaded
+# Speed/perf knobs
+NUM_PREDICT = int(os.environ.get("NUM_PREDICT", "220"))
+NUM_CTX     = int(os.environ.get("NUM_CTX", "2048"))
+KEEP_ALIVE  = os.environ.get("KEEP_ALIVE", "30m")
 
 # --- Build PTB app ---
 tg_app = Application.builder().token(BOT_TOKEN).build()
 
-# --- Streaming call to Ollama (chat first, then generate fallback) ---
+# --- Streaming call to Ollama ---
 async def stream_ollama(prompt: str, sys_prompt: str | None = None):
-    """
-    Streams tokens from Ollama.
-    1) Try /api/chat (newer Ollama).
-    2) On 404, fall back to /api/generate (older Ollama).
-    """
-    # Preferred: /api/chat
-    chat_payload = {
+    payload = {
         "model": OLLAMA_MODEL,
         "messages": (
             ([{"role": "system", "content": sys_prompt}] if sys_prompt else [])
             + [{"role": "user", "content": prompt}]
         ),
         "stream": True,
-        "options": {"num_predict": NUM_PREDICT, "num_ctx": NUM_CTX},
+        "options": {
+            "num_predict": NUM_PREDICT,
+            "num_ctx": NUM_CTX,
+        },
         "keep_alive": KEEP_ALIVE,
     }
     async with httpx.AsyncClient(timeout=None) as client:
-        try:
-            async with client.stream("POST", f"{OLLAMA_URL}/api/chat", json=chat_payload) as r:
-                r.raise_for_status()
-                async for line in r.aiter_lines():
-                    if not line:
-                        continue
-                    data = json.loads(line)
-                    chunk = (data.get("message", {}) or {}).get("content", "")
-                    if chunk:
-                        yield chunk
-                return  # success via /api/chat
-        except httpx.HTTPStatusError as e:
-            # If it's not a 404, surface the error
-            if (e.response is None) or (e.response.status_code != 404):
-                raise
-
-    # Fallback: /api/generate (older Ollama expects a single prompt)
-    merged_prompt = f"{sys_prompt.strip()}\n\nUser: {prompt}" if sys_prompt else prompt
-    gen_payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": merged_prompt,
-        "stream": True,
-        "options": {"num_predict": NUM_PREDICT, "num_ctx": NUM_CTX},
-        "keep_alive": KEEP_ALIVE,
-    }
-    async with httpx.AsyncClient(timeout=None) as client:
-        async with client.stream("POST", f"{OLLAMA_URL}/api/generate", json=gen_payload) as r:
+        async with client.stream("POST", f"{OLLAMA_URL}/api/chat", json=payload) as r:
             r.raise_for_status()
             async for line in r.aiter_lines():
                 if not line:
                     continue
                 data = json.loads(line)
-                chunk = data.get("response", "")
+                chunk = (data.get("message", {}) or {}).get("content", "")
                 if chunk:
                     yield chunk
 
@@ -102,18 +77,13 @@ async def edit_throttled(
     last_text: str,
     min_interval: float = 0.25,
 ):
-    """
-    Edit no more than ~4 times/sec and only if the visible text changed.
-    Returns (new_last_edit_time, new_last_text).
-    """
+    """Edit no more than ~4/s and only if text changed; show last 4096 chars while streaming."""
     display = new_full_text if len(new_full_text) <= MAX_LEN else new_full_text[-MAX_LEN:]
     if display == last_text:
         return last_edit_time, last_text
-
     now = monotonic()
     if (now - last_edit_time) < min_interval:
         return last_edit_time, last_text
-
     try:
         await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=display or "…")
     except BadRequest as e:
@@ -128,10 +98,7 @@ async def send_final(
     full_text: str,
     last_text: str,
 ):
-    """
-    Finalize the message: ensure the edited message has the first chunk,
-    then send any overflow as new messages.
-    """
+    """Finalize the streamed message; split into multiple messages if >4096."""
     first = (full_text[:MAX_LEN] or "…")
     if first != last_text:
         try:
@@ -149,30 +116,33 @@ def _fmt_aff_line(item) -> str:
     return f"• {item.title}\n  {item.url}"
 
 async def maybe_suggest_affiliates(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Suggest 1–3 relevant items based on the user's last message (non-spammy)."""
+    """Suggest 1–3 relevant catalog items after a normal reply (non-spammy)."""
     user_msg = (update.message.text or "").lower()
     matches = find_matches(user_msg, max_items=2)
     presets = preset_for_scenario(user_msg)
-
-    seen = set()
-    suggestions = []
+    seen, suggestions = set(), []
     for it in (matches + presets):
         if it.url not in seen:
-            suggestions.append(it)
-            seen.add(it.url)
-
+            suggestions.append(it); seen.add(it.url)
     if suggestions:
         blurb = "*Helpful gear for this topic:*\n" + "\n".join(_fmt_aff_line(it) for it in suggestions)
         await update.message.reply_text(blurb, disable_web_page_preview=False)
 
 # --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Webhook online ✅  Streaming model replies. Send me a message.")
+    await update.message.reply_text("Webhook online ✅  Send me a preparedness scenario, or try /topics.")
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("/start – status\n/help – this help\n/buy <keywords> – quick links")
+    await update.message.reply_text(
+        "/start – status\n"
+        "/help – this help\n"
+        "/topics – examples I handle\n"
+        "/buy <keywords> – quick affiliate links"
+    )
 
-# /buy <keywords> — fetch links from local catalog
+async def topics_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(format_topics_list(), disable_web_page_preview=True)
+
 async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         return await update.message.reply_text("Usage: /buy <keywords>  e.g., /buy radio")
@@ -187,9 +157,20 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     chat_id = update.effective_chat.id
 
+    # 1) Safety redirect (lawful, non-harmful scope)
+    if needs_safety_redirect(user_text):
+        await update.message.reply_text(safety_redirect_text(), disable_web_page_preview=True)
+        return
+
+    # 2) Smart topic gate (preparedness + fieldcraft + lawful hunting/martial arts)
+    if not is_prep_related(user_text):
+        await update.message.reply_text(nudge_text(), disable_web_page_preview=True)
+        return
+
+    # 3) Show typing…
     await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    # Placeholder message to edit as we stream
+    # 4) Placeholder to stream into
     msg = await update.message.reply_text("…")
     buffer = ""
     last_edit = 0.0
@@ -198,17 +179,23 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         async for chunk in stream_ollama(
             user_text,
-            sys_prompt="You are a helpful, concise assistant replying for a Telegram bot."
+            sys_prompt=(
+                "You are Honey, a concise preparedness & fieldcraft assistant. "
+                "Provide lawful, safety-first guidance only. Avoid tactics that enable harm; "
+                "focus on planning, checklists, safety, legal compliance, fitness, awareness, "
+                "off-grid info, communications, first-aid basics, ethical/regulated hunting guidance. "
+                "Be brief and practical; 3–7 bullets and a one-line summary."
+            )
         ):
             buffer += chunk
             last_edit, last_text = await edit_throttled(
                 context, chat_id, msg.message_id, buffer, last_edit, last_text
             )
 
-        # Final LLM reply flush
+        # 5) Finalize stream
         await send_final(context, chat_id, msg.message_id, buffer or "No response.", last_text)
 
-        # After replying, lightly suggest affiliate links if relevant
+        # 6) Light affiliate suggestions
         await maybe_suggest_affiliates(update, context)
 
     except Exception as e:
@@ -221,6 +208,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Register handlers
 tg_app.add_handler(CommandHandler("start", start))
 tg_app.add_handler(CommandHandler("help", help_cmd))
+tg_app.add_handler(CommandHandler("topics", topics_cmd))
 tg_app.add_handler(CommandHandler("buy", buy_cmd))
 tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
@@ -245,3 +233,4 @@ async def telegram_webhook(request: Request):
     update = Update.de_json(await request.json(), tg_app.bot)
     await tg_app.process_update(update)
     return {"ok": True}
+

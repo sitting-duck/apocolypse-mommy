@@ -1,23 +1,63 @@
-# Honey Bot – Mac Backend Setup (Streamer + ngrok + Ollama + Affiliate Hints)
+# apocolypse-mommy
+# Telegram Bot (FastAPI Webhooks) + ngrok + Ollama (Streaming)
 
-FastAPI + python-telegram-bot (v21), **Ollama** for LLM, **ngrok** for the public webhook, and a tiny **affiliate catalog** that suggests links after replies. It also includes scripts so you don’t have to memorize commands.
+This repo serves as the backend code for Honey the Apocolypse Bot. She gives no bushit advice on how to survive the apocalypse in a pinch okay sugar? Talk to Honey at [t.me/honey_apocalypse_bot](t.me/honey_apocalypse_bot)
 
-<img width="376" height="599" alt="image" src="https://github.com/user-attachments/assets/4270832a-df1c-472e-9449-c865757d1fd7" />
+This guide walks you from **zero → a live Telegram bot** that answers using a **local Ollama model**, with **webhook delivery**, **ngrok tunnel**, and **streaming replies** for snappy UX.
 
----
-
-## 0) What you get
-
-- **FastAPI** server with Telegram webhook at  
-  `/telegram/<YOUR_BOT_TOKEN>`
-- **Streaming** replies from Ollama  
-  (tries `/api/chat`, falls back to `/api/generate`, and finally `/v1/chat/completions`)
-- **Non-spammy affiliate suggestions** (local `affiliate_catalog.py`)
-- **Scripts** to load env, run app, run ngrok, and (un)register webhooks
+> Works on macOS. Adjust accordingly for Linux/Windows.
 
 ---
 
-## 1) Prereqs (one-time)
+## 0) Prerequisites
+
+- Python **3.10+**
+- Git
+- (Optional but handy) Homebrew: https://brew.sh/
+- A Telegram account (for **@BotFather**)
+- An **ngrok** account (free): https://ngrok.com/
+
+
+
+### MacOS Server Side Environment Setup
+```bash
+# note : author using python 3.14.0 at time of writing
+python -m venv .venv && source .venv/bin/activate
+
+# if you want my exact same package versions
+pip install requirements.txt
+
+# if you want latest package versions
+pip install "python-telegram-bot==21.*" fastapi uvicorn httpx
+
+brew install ngrok/ngrok/ngrok
+```
+Note:
+uvicorn is a fast ASGI web server for Python. You use it to run async web apps like FastAPI or Starlette—it listens on a port and serves your app over HTTP so services (like Telegram via your webhook) can reach it.
+
+Quick facts:
+
+ASGI server (async-friendly; supports websockets, high concurrency).
+
+Very lightweight and fast (can use uvloop, httptools).
+
+Simple CLI to start your app.
+
+### ngrok set up
+Go to ngrok.com → Sign up (free) or Log in. <br>
+<img width="1427" height="670" alt="image" src="https://github.com/user-attachments/assets/3b51ad6d-06b0-47ea-95fb-caf2ff5e8b13" /> <br>
+
+In the dashboard, find Getting Started → Your Authtoken. <br>
+<img width="1560" height="713" alt="image" src="https://github.com/user-attachments/assets/9379260e-d518-456b-91e0-eae6328be971" /><br>
+
+```bash
+ngrok config add-authtoken <YOUR_TOKEN>  # once, from ngrok dashboard
+ngrok http 8000
+
+brew install jq
+
+```
+
 
 ### Create new bot in Telegram
 <img width="385" height="632" alt="image" src="https://github.com/user-attachments/assets/c1857b1e-f81b-4821-bea0-14b62b755b9f" /> <br>
@@ -33,207 +73,162 @@ Fill out the form and click the "Create Bot" button pictured above. <br>
 <img width="401" height="442" alt="image" src="https://github.com/user-attachments/assets/3765bff1-fa9e-4722-b2e2-a4b6db7ef703" /><br>
 Click the copy button to copy your telegram bot token. We are going to create a Github Secret for this secret token. It is a character string that should NOT be pasted into your source code. That is a security vulnerability. <br>
 
-### Installs
+### Store the Bot Token
+Let's add this secret using the CLI. If you haven't already, install gh. (GitHub CLI) = convenience tool for GitHub-specific tasks (APIs). It doesn’t replace git; it complements it, whereas the `git` command line tool is mostly used for version control tasks such as merges, pushes, commits, etc. <br>
+
 ```bash
-# If you don’t have Homebrew yet:
-# /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-brew install python@3.11 git jq
-brew install --cask ngrok
-
-# Optional (if you use GitHub CLI for secrets, etc.)
-brew install gh
+brew install gh 
 ```
 
-**Ollama:**
-- Install via app or brew cask:  
-  `brew install --cask ollama`
-- Start server in a terminal so you can see logs:
-  ```bash
-  ollama serve
-  ```
-
----
-
-## 2) Clone + venv + deps
-
+Now let's create the secret. Paste your own token string you copied from Telegram instead of "12345:ABC..." <br>
+We upload it to Github. 
 ```bash
-git clone https://github.com/<you>/apocolypse-mommy.git
-cd apocolypse-mommy
+gh auth login
+gh secret set TELEGRAM_BOT_TOKEN -b"123456:ABC..."
+```
+We also add it to our local environment and make it remain between sessions by appending it to our ~/.zshrc file. 
+```bash
+echo 'export TELEGRAM_BOT_TOKEN="123456:ABC..."' >> ~/.zshrc
+exec zsh   # or: source ~/.zshrc
+echo "$TELEGRAM_BOT_TOKEN"
+```
 
-python3 -m venv .venv
+### Create Webhook (MacOS)
+Webhooks (production): Telegram pushes updates to your HTTPS URL. Best for reliable, scalable deployment. There is another method called long-polling for setting up the chat bot for dev purposes I will not go into, since I believe setting up the webhook is rather simple and fast. <br>
+
+Create a webhook secret. I like to use openssl on the command line to do. Open SSL comes with MacOS. <br>
+```
+# OpenSSL generate (make it URL-safe & trim padding):
+openssl rand -base64 48 | tr '+/' '-_' | tr -d '=' | head -c 64
+# copy that output string to use in your next command.
+
+export WEBHOOK_SECRET=aStrongSecret123
+gh secret set TELEGRAM_BOT_TOKEN -b"123456:ABC..."
+```
+
+Let's go ahead and append this to our ~/.zshrc file to save this value in between sessions: <br>
+```bash
+echo 'export WEBHOOK_SECRET="aStrongSecret123"' >> ~/.zshrc
+exec zsh   # or: source ~/.zshrc
+echo "$WEBHOOK_SECRET"
+
+```
+
+## 5) Run everything (3 terminals)
+
+### Terminal A — run your app
+```bash
 source .venv/bin/activate
+export TELEGRAM_BOT_TOKEN=123456:ABC...    # from BotFather
+export WEBHOOK_SECRET=yourStrongSecret123
+export OLLAMA_URL=http://127.0.0.1:11434
+export OLLAMA_MODEL=qwen2.5                # or llama3.1 / mistral / gemma3
+export NUM_PREDICT=220
+export NUM_CTX=2048
+export KEEP_ALIVE=30m
 
-# If you have requirements.txt (we do):
-pip install -r requirements.txt
-# Otherwise:
-# pip install fastapi uvicorn httpx "python-telegram-bot==21.*"
+uvicorn main:app --reload --port 8000
 ```
 
----
+#### Persist these env vars in `~/.zshrc` (optional)
 
-## 3) Environment file
-
-Create `.env` in the repo root (**don’t commit it**):
+> This stores secrets in plain text on your machine. Fine for local dev, but don’t commit them anywhere.
 
 ```bash
-TELEGRAM_BOT_TOKEN=8376899944:AAH...NcFA
-WEBHOOK_SECRET=yourStrongSecret123
-OLLAMA_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=qwen2.5
-NUM_PREDICT=220
-NUM_CTX=2048
-KEEP_ALIVE=30m
+# append (creates or updates keys if they already exist)
+add_or_update() {
+  KEY="$1"; VAL="$2"
+  if grep -q "^export ${KEY}=" ~/.zshrc; then
+    # macOS sed needs the '' arg
+    sed -i '' "s/^export ${KEY}=.*/export ${KEY}="${VAL//\//\/}"/" ~/.zshrc
+  else
+    echo "export ${KEY}="${VAL}"" >> ~/.zshrc
+  fi
+}
 
-# (optional PA-API while you wait for access)
-# PAAPI_ACCESS_KEY=...
-# PAAPI_SECRET_KEY=...
-# PAAPI_PARTNER_TAG=apocalypsemeowmeow-20
-# PAAPI_MARKETPLACE=www.amazon.com
+add_or_update TELEGRAM_BOT_TOKEN "123456:ABC..."     # <-- put your real token
+add_or_update WEBHOOK_SECRET     "yourStrongSecret123"
+add_or_update OLLAMA_URL         "http://127.0.0.1:11434"
+add_or_update OLLAMA_MODEL       "qwen2.5"           # or llama3.1 / mistral / gemma3
+add_or_update NUM_PREDICT        "220"
+add_or_update NUM_CTX            "2048"
+add_or_update KEEP_ALIVE         "30m"
+
+# reload the shell
+exec zsh   # or: source ~/.zshrc
 ```
 
-> We also keep these in `~/.zshrc` so new terminals have them. The loader script will sync `.env` → `~/.zshrc` and then source it.
+#### Push these secrets to your GitHub repo (with `gh`)
+
+> Run these **in your repo directory**. This stores secrets for **GitHub Actions** so deploy workflows can read them.
+> First time only: `brew install gh && gh auth login`
+
+Use your current shell env values:
+```bash
+gh secret set TELEGRAM_BOT_TOKEN -b"$TELEGRAM_BOT_TOKEN"
+gh secret set WEBHOOK_SECRET     -b"$WEBHOOK_SECRET"
+gh secret set OLLAMA_URL         -b"$OLLAMA_URL"
+gh secret set OLLAMA_MODEL       -b"$OLLAMA_MODEL"
+gh secret set NUM_PREDICT        -b"$NUM_PREDICT"
+gh secret set NUM_CTX            -b"$NUM_CTX"
+gh secret set KEEP_ALIVE         -b"$KEEP_ALIVE"
+```
+
+### Terminal B — expose it
+```bash
+ngrok http 8000
+```
+Copy the **https** URL it prints (e.g., `https://xyz.ngrok.app`).  
+Inspector UI: http://127.0.0.1:4040
+
+### Terminal C — register the webhook
+```bash
+export TELEGRAM_BOT_TOKEN=123456:ABC...
+export WEBHOOK_SECRET=yourStrongSecret123
+export PUBLIC_URL=https://xyz.ngrok.app  # from Terminal B
+
+curl -sS -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook"   -d "url=$PUBLIC_URL/telegram/$TELEGRAM_BOT_TOKEN"   -d "secret_token=$WEBHOOK_SECRET"   -d "drop_pending_updates=true"   -d 'allowed_updates=["message","callback_query"]'
+```
+
+Verify:
+```bash
+curl -sS "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getWebhookInfo" | python -m json.tool
+# Look for result.url, result.pending_update_count, and absence of last_error_message.
+```
+## 6) Test in Telegram
+
+- Open your bot by its **username** or https://t.me/<your_bot_username>
+- Tap **Start** → you should see “Webhook online ✅ …”
+- Send a message → you should see a **streaming** reply.
+- Watch requests/responses in the ngrok inspector (`http://127.0.0.1:4040`).
 
 ---
 
-## 4) Scripts we use
+## 7) Troubleshooting
 
-Create a `scripts/` directory with these files (you already have them, documenting for completeness).
+- **403 in inspector** → secret mismatch. Ensure the same `WEBHOOK_SECRET` in Terminal A and your `setWebhook` call.
+- **404/405** → webhook path must be exactly `/telegram/<BOT_TOKEN>` and via **POST**. Re-run `setWebhook`.
+- **500** → check Terminal A traceback (missing env var, typos, etc.).
+- **No response** → confirm Uvicorn is on `:8000` and ngrok is forwarding to it; use the **https** URL in `setWebhook`.
+- **“Message is not modified”** → already handled by the no-op edit safe code above.
 
-### `scripts/load_env.sh`
-- Reads `.env`, writes/export lines into `~/.zshrc` (idempotent), and sources them **into the current shell**.  
-- **Always `source` this script**, never just run it.
+---
+
+
+### Ollama
+```bash
+export OLLAMA_MODEL="qwen2.5:latest"
+```
+
+
 
 ```bash
-# usage in your shell or other scripts:
-source scripts/load_env.sh
-```
-
-### `scripts/run_app.sh`
-- Ensures venv + deps, sources env, runs Uvicorn (with `--reload` for dev).
-
-```bash
-./scripts/run_app.sh
-```
-
-### `scripts/run_ngrok.sh`
-- Starts `ngrok http 8000` (no duplicates).
-
-```bash
-./scripts/run_ngrok.sh
-# Inspector: http://127.0.0.1:4040
-```
-
-### `scripts/register_webhook.sh`
-- Reads the current **https** forward URL from ngrok’s local API and calls Telegram `setWebhook` with:
-  - `url = https://<ngrok>/telegram/<YOUR_BOT_TOKEN>`
-  - `secret_token = $WEBHOOK_SECRET`
-  - `drop_pending_updates = true`
-  - `allowed_updates = ["message","callback_query"]`
-
-```bash
-./scripts/register_webhook.sh
-```
-
-### `scripts/unregister_webhook.sh`
-- Deletes the webhook (use this before switching machines).
-
-```bash
-./scripts/unregister_webhook.sh
+uvicorn main:app --reload --port 8000
 ```
 
 
----
 
-## 5) Affiliate catalog
-
-File: `affiliate_catalog.py` (sit next to `main.py`).  
-We store a small curated list (title + affiliate URL + tags). The bot inserts **1–3 relevant links** after normal replies, and `/buy <keywords>` returns links explicitly.
-
-> Add or edit items anytime; tags drive the lightweight matching.
-
----
-
-## 6) Running (3 terminals)
-
-**Terminal A – App**
-```bash
-./scripts/run_app.sh
-# health: curl -s http://127.0.0.1:8000/healthz
+``` bash
+brew install ngrok/ngrok/ngrok
+ngrok config add-authtoken <TOKEN>
 ```
-
-**Terminal B – ngrok**
-```bash
-./scripts/run_ngrok.sh
-# note: keep this running; copy the https forwarding URL if needed
-```
-
-**Terminal C – Set webhook to current ngrok URL**
-```bash
-./scripts/register_webhook.sh
-# verify:
-curl -sS "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getWebhookInfo" | jq
-```
-
-**In Telegram:**
-- `/start` – should reply “Webhook online ✅ …”
-- Send a normal message (e.g., “power outage prep for 3 days”) – streamed reply + a small affiliate block.
-- `/buy radio` – explicit catalog lookup.
-
----
-
-## 7) Ollama notes
-
-- If you see 404s on `/api/chat` and `/api/generate`, we now **also** fall back to the **OpenAI-compatible** `/v1/chat/completions`.  
-- Ensure a model is available:
-  ```bash
-  ollama list
-  ollama pull qwen2.5
-  ```
-- Default endpoint URL is `http://127.0.0.1:11434` (matches `OLLAMA_URL` in `.env`).
-
----
-
-## 8) Webhook hygiene (when switching machines)
-
-1. Remove old webhook:
-   ```bash
-   ./scripts/unregister_webhook.sh
-   ```
-2. Start app + ngrok on the new machine, then:
-   ```bash
-   ./scripts/register_webhook.sh
-   ```
-
----
-
-## 9) Troubleshooting
-
-- **403 in ngrok inspector** → `WEBHOOK_SECRET` mismatch (value in `.env` must match the one sent in `register_webhook.sh`).  
-- **404 to `/telegram/<token>`** → wrong bot token hitting your server (another bot still pointing to your ngrok). Delete that bot’s webhook.  
-- **No traffic at all** → `getWebhookInfo` URL doesn’t match current ngrok. Re-run `register_webhook.sh`.  
-- **Ollama connection errors** → is `ollama serve` running? Model pulled? `curl -s 127.0.0.1:11434/api/version` should return a JSON object.  
-- **Env not loaded** → remember to `source scripts/load_env.sh` at least once per terminal session (our runner script does this for you).
-
----
-
-## 10) Security
-
-- Treat `.env` and `~/.zshrc` values as **secrets** (don’t commit).  
-- Rotate your Telegram bot token via **@BotFather** if you ever paste it publicly.  
-- Amazon Associates links: include a visible disclosure on your site/channel.
-
----
-
-## 11) Useful references (quick)
-
-- Ngrok inspector: `http://127.0.0.1:4040`  
-- Health: `http://127.0.0.1:8000/healthz`  
-- Telegram webhook info:
-  ```bash
-  curl -sS "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getWebhookInfo" | jq
-  ```
-
----
-
-Happy shipping! 🚀

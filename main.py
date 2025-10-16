@@ -1,9 +1,11 @@
 # main.py — FastAPI webhook + python-telegram-bot v21 + Ollama (streaming)
 #         + affiliate suggester + concise replies + early length cap
+#         + subscriber management (/subscribe, /unsubscribe)
 
 import os, json, logging
 from time import monotonic
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request, HTTPException
@@ -32,6 +34,10 @@ KEEP_ALIVE  = os.environ.get("KEEP_ALIVE", "30m")
 
 # NEW: cap total streamed characters (prevents giant edits and hitting 4096)
 MAX_TOTAL_CHARS = int(os.environ.get("MAX_TOTAL_CHARS", "3500"))
+
+# NEW: where to store subscribers.json (shared with the video generator repo)
+# e.g., /Users/ashley/Documents/Github/apocolypse-mommy-video-generator/subscribers.json
+SUBSCRIBERS_FILE = Path(os.environ.get("SUBSCRIBERS_FILE", "subscribers.json"))
 
 # --- Build PTB app ---
 tg_app = Application.builder().token(BOT_TOKEN).build()
@@ -137,6 +143,22 @@ async def maybe_suggest_affiliates(update: Update, context: ContextTypes.DEFAULT
         blurb = "*Helpful gear for this topic:*\n" + "\n".join(_fmt_aff_line(it) for it in suggestions)
         await update.message.reply_text(blurb, disable_web_page_preview=False)
 
+# --- Subscriber storage helpers ---
+def _ensure_subs_parent():
+    SUBSCRIBERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+def _load_subscribers() -> set[int]:
+    try:
+        raw = SUBSCRIBERS_FILE.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        return set(int(x) for x in data)
+    except Exception:
+        return set()
+
+def _save_subscribers(subs: set[int]) -> None:
+    _ensure_subs_parent()
+    SUBSCRIBERS_FILE.write_text(json.dumps(sorted(list(subs))), encoding="utf-8")
+
 # --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Webhook online ✅  Streaming model replies. Send me a message.")
@@ -145,8 +167,28 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "/start – status\n"
         "/help – this help\n"
-        "/buy <keywords> – quick affiliate links"
+        "/buy <keywords> – quick affiliate links\n"
+        "/subscribe – get daily videos sent here\n"
+        "/unsubscribe – stop daily videos"
     )
+
+async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    subs = _load_subscribers()
+    cid = update.effective_chat.id
+    if cid in subs:
+        return await update.message.reply_text("You’re already subscribed to the daily video ✅")
+    subs.add(cid)
+    _save_subscribers(subs)
+    await update.message.reply_text("Subscribed! I’ll send you the daily 30-sec survival video 📹")
+
+async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    subs = _load_subscribers()
+    cid = update.effective_chat.id
+    if cid not in subs:
+        return await update.message.reply_text("You’re not currently subscribed.")
+    subs.remove(cid)
+    _save_subscribers(subs)
+    await update.message.reply_text("Unsubscribed. No more daily videos.")
 
 async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -171,7 +213,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     last_edit = 0.0
     last_text = "…"
 
-    # NEW: concise system prompt to keep answers short
+    # concise system prompt to keep answers short
     concise_sys_prompt = (
         "You are a helpful, concise assistant replying for a Telegram bot. "
         "Keep answers under ~180 words (≈900 characters) unless the user asks for details. "
@@ -182,7 +224,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         async for chunk in stream_ollama(user_text, sys_prompt=concise_sys_prompt):
             buffer += chunk
 
-            # NEW: stop early if getting too long; avoids giant edits & 4096 cap
+            # stop early if getting too long; avoids giant edits & 4096 cap
             if len(buffer) >= MAX_TOTAL_CHARS:
                 buffer = buffer[:MAX_TOTAL_CHARS] + "\n\n…(truncated for length)"
                 break
@@ -207,6 +249,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Register handlers
 tg_app.add_handler(CommandHandler("start", start))
 tg_app.add_handler(CommandHandler("help", help_cmd))
+tg_app.add_handler(CommandHandler("subscribe", subscribe))     # NEW
+tg_app.add_handler(CommandHandler("unsubscribe", unsubscribe)) # NEW
 tg_app.add_handler(CommandHandler("buy", buy_cmd))
 tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 

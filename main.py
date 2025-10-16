@@ -1,5 +1,7 @@
-# main.py — FastAPI webhook + python-telegram-bot v21 + Ollama (streaming, no-op edit safe)
-import os, json, logging, asyncio
+# main.py — FastAPI webhook + python-telegram-bot v21 + Ollama (streaming)
+#         + affiliate suggester + concise replies + early length cap
+
+import os, json, logging
 from time import monotonic
 from contextlib import asynccontextmanager
 
@@ -9,6 +11,8 @@ from telegram import Update
 from telegram.constants import ChatAction
 from telegram.error import BadRequest
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+
+from affiliate_catalog import find_matches, preset_for_scenario
 
 logging.basicConfig(level=logging.INFO)
 
@@ -22,9 +26,12 @@ OLLAMA_URL     = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL   = os.environ.get("OLLAMA_MODEL", "qwen2.5")
 
 # Speed/perf knobs (tune to taste)
-NUM_PREDICT = int(os.environ.get("NUM_PREDICT", "220"))  # max tokens to generate
-NUM_CTX     = int(os.environ.get("NUM_CTX", "2048"))     # context window tokens
-KEEP_ALIVE  = os.environ.get("KEEP_ALIVE", "30m")        # keep model loaded
+NUM_PREDICT = int(os.environ.get("NUM_PREDICT", "180"))   # fewer tokens => snappier + shorter
+NUM_CTX     = int(os.environ.get("NUM_CTX", "2048"))
+KEEP_ALIVE  = os.environ.get("KEEP_ALIVE", "30m")
+
+# NEW: cap total streamed characters (prevents giant edits and hitting 4096)
+MAX_TOTAL_CHARS = int(os.environ.get("MAX_TOTAL_CHARS", "3500"))
 
 # --- Build PTB app ---
 tg_app = Application.builder().token(BOT_TOKEN).build()
@@ -38,7 +45,14 @@ async def stream_ollama(prompt: str, sys_prompt: str | None = None):
             + [{"role": "user", "content": prompt}]
         ),
         "stream": True,
-        "options": {"num_predict": NUM_PREDICT, "num_ctx": NUM_CTX},
+        "options": {
+            "num_predict": NUM_PREDICT,
+            "num_ctx": NUM_CTX,
+            # slightly stricter sampling to reduce rambles
+            "temperature": float(os.getenv("TEMP", "0.3")),
+            "top_p": float(os.getenv("TOP_P", "0.9")),
+            "repeat_penalty": float(os.getenv("REPEAT_PENALTY", "1.15")),
+        },
         "keep_alive": KEEP_ALIVE,
     }
     async with httpx.AsyncClient(timeout=None) as client:
@@ -66,12 +80,10 @@ async def edit_throttled(
 ):
     """
     Edit no more than ~4 times/sec and only if the visible text changed.
-    Returns (new_last_edit_time, new_last_text).
+    Shows the tail while streaming if over the 4096-char limit.
     """
-    # What we'll actually show (respect 4096-char limit; show the tail while streaming)
     display = new_full_text if len(new_full_text) <= MAX_LEN else new_full_text[-MAX_LEN:]
 
-    # If nothing changed, skip
     if display == last_text:
         return last_edit_time, last_text
 
@@ -82,7 +94,6 @@ async def edit_throttled(
     try:
         await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=display or "…")
     except BadRequest as e:
-        # Ignore "message is not modified" noise; re-raise other errors
         if "not modified" not in str(e).lower():
             raise
     return now, display
@@ -96,7 +107,7 @@ async def send_final(
 ):
     """
     Finalize the message: ensure the edited message has the first chunk,
-    then send any overflow as new messages.
+    then send any overflow as new messages (Telegram cap 4096).
     """
     first = (full_text[:MAX_LEN] or "…")
     if first != last_text:
@@ -110,12 +121,42 @@ async def send_final(
         await context.bot.send_message(chat_id=chat_id, text=full_text[i:i+MAX_LEN])
         i += MAX_LEN
 
+# --- Affiliate helpers ---
+def _fmt_aff_line(item) -> str:
+    return f"• {item.title}\n  {item.url}"
+
+async def maybe_suggest_affiliates(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_msg = (update.message.text or "").lower()
+    matches = find_matches(user_msg, max_items=2)
+    presets = preset_for_scenario(user_msg)
+    seen, suggestions = set(), []
+    for it in (matches + presets):
+        if it.url not in seen:
+            suggestions.append(it); seen.add(it.url)
+    if suggestions:
+        blurb = "*Helpful gear for this topic:*\n" + "\n".join(_fmt_aff_line(it) for it in suggestions)
+        await update.message.reply_text(blurb, disable_web_page_preview=False)
+
 # --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Webhook online ✅  Streaming model replies. Send me a message.")
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("/start – status\n/help – this help")
+    await update.message.reply_text(
+        "/start – status\n"
+        "/help – this help\n"
+        "/buy <keywords> – quick affiliate links"
+    )
+
+async def buy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        return await update.message.reply_text("Usage: /buy <keywords>  e.g., /buy radio")
+    q = " ".join(context.args)
+    items = find_matches(q, max_items=3)
+    if not items:
+        return await update.message.reply_text("No matching items yet—try different keywords.")
+    text = "*Suggested items:*\n" + "\n".join(_fmt_aff_line(it) for it in items)
+    await update.message.reply_text(text, disable_web_page_preview=False)
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
@@ -130,18 +171,31 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     last_edit = 0.0
     last_text = "…"
 
+    # NEW: concise system prompt to keep answers short
+    concise_sys_prompt = (
+        "You are a helpful, concise assistant replying for a Telegram bot. "
+        "Keep answers under ~180 words (≈900 characters) unless the user asks for details. "
+        "Prefer short bullets for steps; avoid long stories."
+    )
+
     try:
-        async for chunk in stream_ollama(
-            user_text,
-            sys_prompt="You are a conciise, badass, tough Southern Belle giving apocalypse survival advice. You are sweet and use pet names like sugar, sweet pea etc. In a survival scenario legal and illegal may not be relevant, so when describing things that tread this line, you do explain that they are not legal under normal circumstances, but still describe in detail how to it."
-        ):
+        async for chunk in stream_ollama(user_text, sys_prompt=concise_sys_prompt):
             buffer += chunk
+
+            # NEW: stop early if getting too long; avoids giant edits & 4096 cap
+            if len(buffer) >= MAX_TOTAL_CHARS:
+                buffer = buffer[:MAX_TOTAL_CHARS] + "\n\n…(truncated for length)"
+                break
+
             last_edit, last_text = await edit_throttled(
                 context, chat_id, msg.message_id, buffer, last_edit, last_text
             )
 
-        # Final flush (split if > 4096)
+        # Final LLM reply flush (splits >4096 into multiple messages)
         await send_final(context, chat_id, msg.message_id, buffer or "No response.", last_text)
+
+        # After replying, lightly suggest affiliate links if relevant
+        await maybe_suggest_affiliates(update, context)
 
     except Exception as e:
         logging.exception("Streaming error")
@@ -153,6 +207,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Register handlers
 tg_app.add_handler(CommandHandler("start", start))
 tg_app.add_handler(CommandHandler("help", help_cmd))
+tg_app.add_handler(CommandHandler("buy", buy_cmd))
 tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
 # --- FastAPI + PTB lifecycle ---

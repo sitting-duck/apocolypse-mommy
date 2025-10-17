@@ -29,7 +29,7 @@ cp ./.env.tmp ./.env
 python -m venv .venv && source .venv/bin/activate
 
 # if you want my exact same package versions
-pip install requirements.txt
+pip install -r requirements.txt
 
 # if you want latest package versions
 pip install "python-telegram-bot==21.*" fastapi uvicorn httpx

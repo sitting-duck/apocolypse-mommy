@@ -1,7 +1,7 @@
 # apocolypse-mommy
 # Telegram Bot (FastAPI Webhooks) + ngrok + Ollama (Streaming)
 
-This repo serves as the backend code for Honey the Apocolypse Bot. She gives no bushit advice on how to survive the apocalypse in a pinch okay sugar? Talk to Honey at [t.me/honey_apocalypse_bot](t.me/honey_apocalypse_bot)
+This repo serves as the backend code for Honey the Apocolypse Bot. She gives no bushit advice on how to survive the apocalypse in a pinch okay sugar? Talk to Honey at [t.me/honey_apocalypse_bot](https://t.me/honey_apocalypse_bot)
 
 This guide walks you from **zero → a live Telegram bot** that answers using a **local Ollama model**, with **webhook delivery**, **ngrok tunnel**, and **streaming replies** for snappy UX.
 
@@ -18,9 +18,13 @@ This guide walks you from **zero → a live Telegram bot** that answers using a 
 - An **ngrok** account (free): https://ngrok.com/
 
 
-
 ### MacOS Server Side Environment Setup
 ```bash
+git clone https://github.com/sitting-duck/apocolypse-mommy.git
+cd apocolypse-mommy
+
+cp ./.env.tmp ./.env
+
 # note : author using python 3.14.0 at time of writing
 python -m venv .venv && source .venv/bin/activate
 
@@ -55,6 +59,10 @@ ngrok config add-authtoken <YOUR_TOKEN>  # once, from ngrok dashboard
 ngrok http 8000
 
 brew install jq
+
+echo 'export NGROK_TOKEN="<YOUR_TOKEN> "' >> ~/.zshrc
+exec zsh   # or: source ~/.zshrc
+echo "$NGROK_TOKEN"
 
 ```
 

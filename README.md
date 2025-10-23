@@ -25,6 +25,7 @@ cd apocolypse-mommy
 
 brew install ngrok/ngrok/ngrok
 brew install jq
+brew install ollama
 ```
 
 ### Environment File
@@ -45,7 +46,7 @@ KEEP_ALIVE=30m
 
 ```
 
-When you run `./scripts/run_app.sh` it will parse your `.env` file and pass the needed info to the app. The `${}` indicates an environment variable. As you collect this info we need for our environment you are welcome to create these environment variables manually using export, to store them in your zshrc or to paste them directly into your .env file. .gitignore will have `.env` ignored so all of your secret tokens will not go to version control.
+When you run `./scripts/run_app.sh` it will parse your `.env` file and pass the needed info to the app. As you collect tokens for authentication you will paste them directly into your .env file. .gitignore will have `.env` ignored so all of your secret tokens will not go to version control.
 
 
 ### ngrok set up
@@ -73,7 +74,7 @@ Fill out the form and click the "Create Bot" button pictured above. <br>
 <img width="401" height="442" alt="image" src="https://github.com/user-attachments/assets/3765bff1-fa9e-4722-b2e2-a4b6db7ef703" /><br>
 Click the copy button to copy your telegram bot token and paste into your .env file for TELEGRAM_BOT_TOKEN.<br>
 
-### Create Webhook
+### Create Webhook Secret
 Create a webhook secret. I like to use openssl on the command line to do this since OpenSSL comes with MacOS. <br>
 ```
 # OpenSSL generate (make it URL-safe & trim padding):
@@ -99,10 +100,12 @@ Inspector UI: http://127.0.0.1:4040
 
 
 
-### Terminal C — register the webhook
+### Terminal C — register the webhook and run Ollama
 ```bash
+
 source ./scripts/load_env.sh
 
+# you do not need to register your webhook more than once
 curl -sS -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook"   -d "url=$PUBLIC_URL/telegram/$TELEGRAM_BOT_TOKEN"   -d "secret_token=$WEBHOOK_SECRET"   -d "drop_pending_updates=true"   -d 'allowed_updates=["message","callback_query"]'
 ```
 
@@ -110,6 +113,11 @@ Verify:
 ```bash
 curl -sS "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getWebhookInfo" | python -m json.tool
 # Look for result.url, result.pending_update_count, and absence of last_error_message.
+```
+
+Now you can pull your LLM model and run Ollama
+```bash
+./scripts/check_ollama.sh
 ```
 ## 6) Test in Telegram
 

@@ -30,7 +30,6 @@ else
   ngrok config add-authtoken "$NGROK_TOKEN"
 fi
 
-#ngrok config add-authtoken ${NGROK_TOKEN}  # once, from ngrok dashboard
 ngrok http 8000
 
 

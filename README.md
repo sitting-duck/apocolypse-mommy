@@ -53,7 +53,7 @@ NGrok is a service that will allow you to have up to 3 free endpoints.<br>
 Go to ngrok.com → Sign up (free) or Log in. <br>
 <img width="1427" height="670" alt="image" src="https://github.com/user-attachments/assets/3b51ad6d-06b0-47ea-95fb-caf2ff5e8b13" /> <br>
 
-In the dashboard, find Getting Started → Your Authtoken. <br>
+In the dashboard, find Getting Started → [Your Authtoken.](https://dashboard.ngrok.com/get-started/your-authtoken) <br>
 <img width="1560" height="713" alt="image" src="https://github.com/user-attachments/assets/9379260e-d518-456b-91e0-eae6328be971" /><br>
 
 Copy that token string and paste it into your .env file: <br>

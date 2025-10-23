@@ -33,16 +33,6 @@ pip install -r requirements.txt
 
 brew install ngrok/ngrok/ngrok
 ```
-Note:
-uvicorn is a fast ASGI web server for Python. You use it to run async web apps like FastAPI or Starlette—it listens on a port and serves your app over HTTP so services (like Telegram via your webhook) can reach it.
-
-Quick facts:
-
-ASGI server (async-friendly; supports websockets, high concurrency).
-
-Very lightweight and fast (can use uvloop, httptools).
-
-Simple CLI to start your app.
 
 ### ngrok set up
 Go to ngrok.com → Sign up (free) or Log in. <br>

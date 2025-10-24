@@ -23,31 +23,18 @@ This guide walks you from **zero → a live Telegram bot** that answers using a 
 git clone https://github.com/sitting-duck/apocolypse-mommy.git
 cd apocolypse-mommy
 
+cp ./.env.tmp ./.env
+
+# note : author using python 3.14.0 at time of writing
+python -m venv .venv && source .venv/bin/activate
+
+# if you want my exact same package versions
+pip install -r requirements.txt
+
 brew install ngrok/ngrok/ngrok
 brew install jq
 brew install ollama
 ```
-
-### Environment File
-```bash
-cp ./.env.tmp ./.env
-```
-to create your own environment file. If you look inside it you will see:
-```bash
-TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-WEBHOOK_SECRET=${WEBHOOK_SECRET}
-NGROK_TOKEN=${NGROK_TOKEN}
-
-OLLAMA_URL=${OLLAMA_URL}
-OLLAMA_MODEL=${OLLAMA_MODEL}
-NUM_PREDICT=220
-NUM_CTX=2048
-KEEP_ALIVE=30m
-
-```
-
-When you run `./scripts/run_app.sh` it will parse your `.env` file and pass the needed info to the app. As you collect tokens for authentication you will paste them directly into your .env file. .gitignore will have `.env` ignored so all of your secret tokens will not go to version control.
-
 
 ### ngrok set up
 NGrok is a service that will allow you to have up to 3 free endpoints.<br>
@@ -57,7 +44,10 @@ Go to ngrok.com → Sign up (free) or Log in. <br>
 In the dashboard, find Getting Started → [Your Authtoken.](https://dashboard.ngrok.com/get-started/your-authtoken) <br>
 <img width="1560" height="713" alt="image" src="https://github.com/user-attachments/assets/9379260e-d518-456b-91e0-eae6328be971" /><br>
 
-Copy that token string and paste it into your .env file: <br>
+Paste the token into `NGROK_TOKEN` in your `.env` file. 
+
+# Webhook
+Run `scripts/register_webhook.sh`. Check your `.env` file to make sure `WEBHOOK_SECRET` has a value. The script creates one using OpenSSL but if for some reason it fails you can use any string generator and just create one yourself, paste it into `.env`, and then run `scripts/register_webhook.sh`.
 
 
 ### Create new bot in Telegram
@@ -72,53 +62,23 @@ Click the "Create a New Bot" button pictured above. <br>
 Fill out the form and click the "Create Bot" button pictured above. <br>
 <br> 
 <img width="401" height="442" alt="image" src="https://github.com/user-attachments/assets/3765bff1-fa9e-4722-b2e2-a4b6db7ef703" /><br>
-Click the copy button to copy your telegram bot token and paste into your .env file for TELEGRAM_BOT_TOKEN.<br>
+Click the copy button to copy your telegram bot token and paste into your .env file for `TELEGRAM_BOT_TOKEN`. 
 
-### Create Webhook Secret
-Create a webhook secret. I like to use openssl on the command line to do this since OpenSSL comes with MacOS. <br>
-```
-# OpenSSL generate (make it URL-safe & trim padding):
-openssl rand -base64 48 | tr '+/' '-_' | tr -d '=' | head -c 64
-
-# copy that output string and paste directly into your .env file for WEBHOOK_SECRET
-```
-
-## 5) Run everything (3 terminals)
+## Run everything (2 terminals)
 
 ### Terminal A — run your app
 ```bash
-python ./scripts/run_app.sh
-```
-
-### Terminal B — expose it
-```bash
-ngrok http 8000
+scripts/run_app.sh
 ```
 Copy the **https** URL it prints (e.g., `https://xyz.ngrok.app`) and paste it into your .env file for `PUBLIC_URL`.
 
-Inspector UI: http://127.0.0.1:4040
 
-
-
-### Terminal C — register the webhook and run Ollama
-```bash
-
-source ./scripts/load_env.sh
-
-# you do not need to register your webhook more than once
-curl -sS -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook"   -d "url=$PUBLIC_URL/telegram/$TELEGRAM_BOT_TOKEN"   -d "secret_token=$WEBHOOK_SECRET"   -d "drop_pending_updates=true"   -d 'allowed_updates=["message","callback_query"]'
-```
-
-Verify:
-```bash
-curl -sS "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getWebhookInfo" | python -m json.tool
-# Look for result.url, result.pending_update_count, and absence of last_error_message.
-```
-
-Now you can pull your LLM model and run Ollama
+### Terminal C - Ollama
 ```bash
 ./scripts/check_ollama.sh
+ollama serve
 ```
+
 ## 6) Test in Telegram
 
 - Open your bot by its **username** or https://t.me/<your_bot_username>
@@ -137,11 +97,5 @@ Now you can pull your LLM model and run Ollama
 - **“Message is not modified”** → already handled by the no-op edit safe code above.
 
 ---
-
-
-### Ollama
-```bash
-export OLLAMA_MODEL="qwen2.5:latest"
-```
 
 

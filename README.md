@@ -23,12 +23,11 @@ This guide walks you from **zero → a live Telegram bot** that answers using a 
 git clone https://github.com/sitting-duck/apocolypse-mommy.git
 cd apocolypse-mommy
 
+# .env is ignored-- you will store your tokens and secrets in here
 cp ./.env.tmp ./.env
 
-# note : author using python 3.14.0 at time of writing
 python -m venv .venv && source .venv/bin/activate
 
-# if you want my exact same package versions
 pip install -r requirements.txt
 
 brew bundle
@@ -64,17 +63,21 @@ Click the copy button to copy your telegram bot token and paste into your .env f
 
 ## Run everything (2 terminals)
 
-### Terminal A — run your app
+### Terminal A - NGROK Endpoint
 ```bash
-scripts/run_app.sh
+scripts/run_ngrok.sh
 ```
 Copy the **https** URL it prints (e.g., `https://xyz.ngrok.app`) and paste it into your .env file for `PUBLIC_URL`.
 
-
-### Terminal C - Ollama
+### Terminal B - Ollama
 ```bash
-./scripts/check_ollama.sh
-ollama serve
+./scripts/run_ollama.sh
+```
+
+### Terminal C — run your app
+```bash
+scripts/register_webhook.sh
+scripts/run_app.sh
 ```
 
 ## 6) Test in Telegram
@@ -83,6 +86,9 @@ ollama serve
 - Tap **Start** → you should see “Webhook online ✅ …”
 - Send a message → you should see a **streaming** reply.
 - Watch requests/responses in the ngrok inspector (`http://127.0.0.1:4040`).
+
+<img width="391" height="635" alt="image" src="https://github.com/user-attachments/assets/0eb57b22-1348-4c7b-a5e8-bf29d77dbf9a" />
+
 
 ---
 

@@ -101,5 +101,16 @@ scripts/run_app.sh
 - **“Message is not modified”** → already handled by the no-op edit safe code above.
 
 ---
+## 8) CRON job for daily analytics charts
+```bash
+# every morning at 8am
+0 8 * * * cd /path/to/your/bot && source .venv/bin/activate && python analytics_visuals.py
 
+```
+generate charts manually:
+```bash
+# from your bot repo (or wherever analytics/events.jsonl lives)
+python analytics_visuals.py
+open charts  # macOS convenience
 
+```

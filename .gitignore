@@ -1,3 +1,7 @@
+#analytics file
+analytics/events.jsonl
+charts/
+
 .venv/
 venv/
 env/

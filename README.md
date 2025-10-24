@@ -63,18 +63,24 @@ Click the copy button to copy your telegram bot token and paste into your .env f
 
 ## Run everything (2 terminals)
 
-### Terminal A — run your app
+### Terminal A - NGROK Endpoint
 ```bash
-scripts/run_app.sh
+scripts/run_ngrok.sh
 ```
 Copy the **https** URL it prints (e.g., `https://xyz.ngrok.app`) and paste it into your .env file for `PUBLIC_URL`.
 
-
-### Terminal C - Ollama
+### Terminal B - Ollama
 ```bash
-./scripts/check_ollama.sh
-ollama serve
+./scripts/run_ollama.sh
 ```
+
+### Terminal C — run your app
+```bash
+scripts/run_app.sh
+```
+
+
+
 
 ## 6) Test in Telegram
 

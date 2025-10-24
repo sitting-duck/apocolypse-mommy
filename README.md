@@ -31,9 +31,7 @@ python -m venv .venv && source .venv/bin/activate
 # if you want my exact same package versions
 pip install -r requirements.txt
 
-brew install ngrok/ngrok/ngrok
-brew install jq
-brew install ollama
+brew bundle
 ```
 
 ### ngrok set up

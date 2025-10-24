@@ -23,12 +23,11 @@ This guide walks you from **zero → a live Telegram bot** that answers using a 
 git clone https://github.com/sitting-duck/apocolypse-mommy.git
 cd apocolypse-mommy
 
+# .env is ignored-- you will store your tokens and secrets in here
 cp ./.env.tmp ./.env
 
-# note : author using python 3.14.0 at time of writing
 python -m venv .venv && source .venv/bin/activate
 
-# if you want my exact same package versions
 pip install -r requirements.txt
 
 brew bundle

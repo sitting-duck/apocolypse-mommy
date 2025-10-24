@@ -76,11 +76,9 @@ Copy the **https** URL it prints (e.g., `https://xyz.ngrok.app`) and paste it in
 
 ### Terminal C — run your app
 ```bash
+scripts/register_webhook.sh
 scripts/run_app.sh
 ```
-
-
-
 
 ## 6) Test in Telegram
 
@@ -88,6 +86,9 @@ scripts/run_app.sh
 - Tap **Start** → you should see “Webhook online ✅ …”
 - Send a message → you should see a **streaming** reply.
 - Watch requests/responses in the ngrok inspector (`http://127.0.0.1:4040`).
+
+<img width="391" height="635" alt="image" src="https://github.com/user-attachments/assets/0eb57b22-1348-4c7b-a5e8-bf29d77dbf9a" />
+
 
 ---
 

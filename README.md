@@ -1,7 +1,7 @@
 # apocolypse-mommy
 # Telegram Bot (FastAPI Webhooks) + ngrok + Ollama (Streaming)
 
-This repo serves as the backend code for Honey the Apocolypse Bot. She gives no bushit advice on how to survive the apocalypse in a pinch okay sugar? Talk to Honey at [t.me/honey_apocalypse_bot](https://t.me/honey_apocalypse_bot)
+This repo serves as the backend code for Honey the Apocolypse Bot. She gives advice on how to survive the apocalypse in a pinch okay sugar? Talk to Honey at [t.me/honey_apocalypse_bot](https://t.me/honey_apocalypse_bot)
 
 This guide walks you from **zero → a live Telegram bot** that answers using a **local Ollama model**, with **webhook delivery**, **ngrok tunnel**, and **streaming replies** for snappy UX.
 
@@ -9,11 +9,11 @@ This guide walks you from **zero → a live Telegram bot** that answers using a 
 
 ---
 
-## 0) Prerequisites
+### Prerequisites
 
-- Python **3.10+**
+- Python **3.10+** (author using 3.11.9)
 - Git
-- (Optional but handy) Homebrew: https://brew.sh/
+- Homebrew: https://brew.sh/
 - A Telegram account (for **@BotFather**)
 - An **ngrok** account (free): https://ngrok.com/
 
@@ -23,23 +23,22 @@ This guide walks you from **zero → a live Telegram bot** that answers using a 
 git clone https://github.com/sitting-duck/apocolypse-mommy.git
 cd apocolypse-mommy
 
+# .env is ignored-- you will store your tokens and secrets in here
 cp ./.env.tmp ./.env
 
-# note : author using python 3.14.0 at time of writing
 python -m venv .venv && source .venv/bin/activate
 
-# if you want my exact same package versions
 pip install -r requirements.txt
 
-brew install ngrok/ngrok/ngrok
-brew install jq
+brew bundle
 ```
 
 ### ngrok set up
+NGrok is a service that will allow you to have up to 3 free endpoints.<br>
 Go to ngrok.com → Sign up (free) or Log in. <br>
 <img width="1427" height="670" alt="image" src="https://github.com/user-attachments/assets/3b51ad6d-06b0-47ea-95fb-caf2ff5e8b13" /> <br>
 
-In the dashboard, find Getting Started → Your Authtoken. <br>
+In the dashboard, find Getting Started → [Your Authtoken.](https://dashboard.ngrok.com/get-started/your-authtoken) <br>
 <img width="1560" height="713" alt="image" src="https://github.com/user-attachments/assets/9379260e-d518-456b-91e0-eae6328be971" /><br>
 
 Paste the token into `NGROK_TOKEN` in your `.env` file. 
@@ -64,22 +63,21 @@ Click the copy button to copy your telegram bot token and paste into your .env f
 
 ## Run everything (2 terminals)
 
-### Terminal A — run your app
+### Terminal A - NGROK Endpoint
 ```bash
+scripts/run_ngrok.sh
+```
+Copy the **https** URL it prints (e.g., `https://xyz.ngrok.app`) and paste it into your .env file for `PUBLIC_URL`.
+
+### Terminal B - Ollama
+```bash
+./scripts/run_ollama.sh
+```
+
+### Terminal C — run your app
+```bash
+scripts/register_webhook.sh
 scripts/run_app.sh
-```
-
-
-### Terminal B — expose it
-```bash
-ngrok http 8000
-```
-Copy the **https** URL it prints (e.g., `https://xyz.ngrok.app`).  
-Inspector UI: http://127.0.0.1:4040
-
-### Terminal C - Ollama
-```bash
-ollama serve
 ```
 
 ## 6) Test in Telegram
@@ -88,6 +86,9 @@ ollama serve
 - Tap **Start** → you should see “Webhook online ✅ …”
 - Send a message → you should see a **streaming** reply.
 - Watch requests/responses in the ngrok inspector (`http://127.0.0.1:4040`).
+
+<img width="391" height="635" alt="image" src="https://github.com/user-attachments/assets/0eb57b22-1348-4c7b-a5e8-bf29d77dbf9a" />
+
 
 ---
 

@@ -1,6 +1,7 @@
 # main.py — FastAPI webhook + python-telegram-bot v21 + Ollama (streaming)
 #         + affiliate suggester + concise replies + early length cap
 #         + subscriber management (/subscribe, /unsubscribe)
+#         + analytics logging (interactions, affiliate impressions, system)
 
 import os, json, logging
 from time import monotonic
@@ -15,6 +16,14 @@ from telegram.error import BadRequest
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
 from affiliate_catalog import find_matches, preset_for_scenario
+
+# NEW: analytics
+from analytics_logger import (
+    log_interaction,
+    log_affiliate_impressions,
+    log_system,
+    categorize,
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -143,6 +152,20 @@ async def maybe_suggest_affiliates(update: Update, context: ContextTypes.DEFAULT
         blurb = "*Helpful gear for this topic:*\n" + "\n".join(_fmt_aff_line(it) for it in suggestions)
         await update.message.reply_text(blurb, disable_web_page_preview=False)
 
+        # NEW: log affiliate impressions
+        try:
+            user_id = update.effective_user.id if update.effective_user else 0
+        except Exception:
+            user_id = 0
+        items_for_log = [{"title": it.title, "url": it.url} for it in suggestions]
+        # categorize based on the original user message
+        log_affiliate_impressions(
+            user_id=user_id,
+            message=update.message.text or "",
+            category=None,  # let the logger auto-categorize from message
+            items=items_for_log,
+        )
+
 # --- Subscriber storage helpers ---
 def _ensure_subs_parent():
     SUBSCRIBERS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -220,6 +243,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Prefer short bullets for steps; avoid long stories."
     )
 
+    # NEW: start timing for analytics
+    start_ts = monotonic()
+
     try:
         async for chunk in stream_ollama(user_text, sys_prompt=concise_sys_prompt):
             buffer += chunk
@@ -239,12 +265,46 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # After replying, lightly suggest affiliate links if relevant
         await maybe_suggest_affiliates(update, context)
 
+        # NEW: log interaction success
+        elapsed_ms = int((monotonic() - start_ts) * 1000)
+        reply_len = len(buffer or "")
+        try:
+            user_id = update.effective_user.id if update.effective_user else 0
+        except Exception:
+            user_id = 0
+        log_interaction(
+            user_id=user_id,
+            message=user_text or "",
+            reply_len=reply_len,
+            response_time_ms=elapsed_ms,
+            category=categorize(user_text or ""),
+            error=False,
+            meta={"model": OLLAMA_MODEL},
+        )
+
     except Exception as e:
         logging.exception("Streaming error")
         try:
             await context.bot.edit_message_text(chat_id=chat_id, message_id=msg.message_id, text=f"Model error: {e}")
         except BadRequest:
             await context.bot.send_message(chat_id=chat_id, text=f"Model error: {e}")
+
+        # NEW: log interaction error
+        elapsed_ms = int((monotonic() - start_ts) * 1000)
+        reply_len = len(buffer or "")
+        try:
+            user_id = update.effective_user.id if update.effective_user else 0
+        except Exception:
+            user_id = 0
+        log_interaction(
+            user_id=user_id,
+            message=user_text or "",
+            reply_len=reply_len,
+            response_time_ms=elapsed_ms,
+            category=categorize(user_text or ""),
+            error=True,
+            meta={"model": OLLAMA_MODEL, "exception": str(e)},
+        )
 
 # Register handlers
 tg_app.add_handler(CommandHandler("start", start))
@@ -257,6 +317,11 @@ tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 # --- FastAPI + PTB lifecycle ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # NEW: system log on startup
+    try:
+        log_system(level="info", msg="bot_start", meta={"model": OLLAMA_MODEL})
+    except Exception:
+        pass
     await tg_app.initialize()
     yield
     await tg_app.shutdown()
@@ -275,4 +340,3 @@ async def telegram_webhook(request: Request):
     update = Update.de_json(await request.json(), tg_app.bot)
     await tg_app.process_update(update)
     return {"ok": True}
-

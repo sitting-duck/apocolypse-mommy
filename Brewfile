@@ -7,4 +7,5 @@ tap "ngrok/ngrok"
 brew "ngrok"     # from ngrok/ngrok tap
 brew "jq"
 brew "ollama"
+brew "ffmpeg"
 

@@ -23,27 +23,6 @@ if [[ -f ./scripts/load_env.sh ]]; then
   source ./scripts/load_env.sh
 fi
 
-<<<<<<< HEAD
-#CFG="${HOME}/.config/ngrok/ngrok.yml"
-#if [ -f "$CFG" ] && grep -q '^authtoken:' "$CFG"; then
-#  echo "ngrok authtoken already set in $CFG"
-#else
-#  ngrok config add-authtoken "$NGROK_TOKEN"
-#fi
-#
-#ngrok http 8000
-=======
-CFG="${HOME}/.config/ngrok/ngrok.yml"
-if [ -f "$CFG" ] && grep -q '^authtoken:' "$CFG"; then
-  echo "ngrok authtoken already set in $CFG"
-else
-  ngrok config add-authtoken "$NGROK_TOKEN"
-fi
-
-ngrok http 8000
->>>>>>> 5674b6c8caf60f687315739dc07e4bc29dafa2a5
-
-
 # 5) Run app (use python -m to avoid PATH issues)
 exec python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 

@@ -81,3 +81,5 @@ OLLAMA_MODEL="$(get_env OLLAMA_MODEL || true)"
 
 ensure_model "$OLLAMA_MODEL"
 
+ollama serve
+

@@ -4,7 +4,7 @@ set -euo pipefail
 ENV_FILE=".env"
 
 # --- Load env file (initial) ---
-./scripts/load_env.sh "$ENV_FILE" >/dev/null
+source ./scripts/load_env.sh "$ENV_FILE" >/dev/null
 
 # --- Ensure jq is installed ---
 if ! command -v jq >/dev/null; then
@@ -28,7 +28,7 @@ if [ -z "${WEBHOOK_SECRET:-}" ]; then
 
   echo "Generated new WEBHOOK_SECRET and wrote to $ENV_FILE."
   # Reload environment after modification
-  ./scripts/load_env.sh "$ENV_FILE" >/dev/null
+  source ./scripts/load_env.sh "$ENV_FILE" >/dev/null
 else
   echo "Existing WEBHOOK_SECRET found."
 fi

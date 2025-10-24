@@ -23,14 +23,14 @@ if [[ -f ./scripts/load_env.sh ]]; then
   source ./scripts/load_env.sh
 fi
 
-CFG="${HOME}/.config/ngrok/ngrok.yml"
-if [ -f "$CFG" ] && grep -q '^authtoken:' "$CFG"; then
-  echo "ngrok authtoken already set in $CFG"
-else
-  ngrok config add-authtoken "$NGROK_TOKEN"
-fi
-
-ngrok http 8000
+#CFG="${HOME}/.config/ngrok/ngrok.yml"
+#if [ -f "$CFG" ] && grep -q '^authtoken:' "$CFG"; then
+#  echo "ngrok authtoken already set in $CFG"
+#else
+#  ngrok config add-authtoken "$NGROK_TOKEN"
+#fi
+#
+#ngrok http 8000
 
 
 # 5) Run app (use python -m to avoid PATH issues)

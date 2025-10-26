@@ -1,3 +1,6 @@
+# video
+daily_videos/
+
 #analytics file
 analytics/events.jsonl
 charts/

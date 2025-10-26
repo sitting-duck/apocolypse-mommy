@@ -99,7 +99,12 @@ scripts/run_app.sh
 - **500** → check Terminal A traceback (missing env var, typos, etc.).
 - **No response** → confirm Uvicorn is on `:8000` and ngrok is forwarding to it; use the **https** URL in `setWebhook`.
 - **“Message is not modified”** → already handled by the no-op edit safe code above.
-
+- `ModuleNotFoundError: No module named 'moviepy.editor'` when running `make_video.py`
+Run: <br>x 
+```bash
+    pip uninstall moviepy
+    pip install moviepy==1.0.3
+```
 ---
 ## 8) CRON job for daily analytics charts
 ```bash

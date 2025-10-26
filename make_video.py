@@ -8,7 +8,8 @@ On each run:
   3) TTS voiceover (Edge-TTS with macOS 'say' fallback)
   4) Download free stock footage from Pexels
   5) Stitch clips to ~30s with MoviePy, overlay voice, export MP4 + SRT
-  6) Send the video:
+  6) (Optional) Burn the SRT into the video using ffmpeg
+  7) Send the video:
       - to all chats in subscribers.json (populated by your Honey bot via /subscribe)
       - and/or to explicit targets in TARGET_CHAT (comma-separated: @channel, -100123..., etc.)
 
@@ -24,9 +25,13 @@ Environment (via .env or ~/.zshrc):
   TARGET_CHAT=@my_channel,-1001234567890
   TTS_BACKEND=edge|say   # optional; default tries edge then falls back to 'say' on macOS
 
+New toggles:
+  CAPTIONS_MODE=burn|sidecar|both   # default burn
+  SEND_VARIANT=burned|plain         # default auto: burned if possible else plain
+
 Requirements:
   pip install moviepy requests edge-tts python-dotenv
-  ffmpeg must be installed and on PATH.
+  ffmpeg must be installed and on PATH (with libass for subtitles).
 """
 
 import os, re, random, shutil, datetime, tempfile, asyncio, json, sys, subprocess
@@ -50,6 +55,11 @@ RANDOM_TOPICS = [
     "first-aid for cuts and bleeding", "safe lighting during outages",
     "phone power when the grid is down", "storm prep 24 hours out"
 ]
+
+# Subtitle styling for burn-in (libass force_style) or None for default
+SRT_STYLE = None
+# Example:
+# SRT_STYLE = "FontName=Arial,FontSize=28,Outline=2,Shadow=1,PrimaryColour=&H00FFFFFF&"
 
 # ---------- Utilities ----------
 def slugify(s: str) -> str:
@@ -105,48 +115,132 @@ def _tts_say(text: str, voice_hint: str, out_mp3: Path):
     }
     mac_voice = voice_map.get(voice_hint, "Samantha")
     aiff = out_mp3.with_suffix(".aiff")
-    # synthesize to AIFF
     subprocess.run(["say", "-v", mac_voice, "-r", "190", "-o", str(aiff), text], check=True)
-    # convert to AAC in an .m4a container first (wider support), then rename to .mp3 target name
     tmp_m4a = out_mp3.with_suffix(".m4a")
     subprocess.run(["ffmpeg", "-y", "-i", str(aiff), "-c:a", "aac", str(tmp_m4a)], check=True)
-    # move/rename to requested .mp3 path (container mismatch is fine for Telegram; if you prefer MP3, change codec to libmp3lame)
     shutil.move(str(tmp_m4a), str(out_mp3))
     try:
         aiff.unlink(missing_ok=True)
     except Exception:
         pass
 
-async def _tts_edge_async(text: str, voice: str, out_mp3: Path):
+async def _edge_tts_stream_and_srt(text: str, voice: str, out_mp3: Path) -> str:
+    """
+    Streams Edge-TTS audio to out_mp3 while collecting WordBoundary timings,
+    then returns an SRT string built from those timings.
+    """
     import edge_tts
     communicate = edge_tts.Communicate(text, voice=voice, rate="+0%")
-    await communicate.save(str(out_mp3))
 
-def gen_tts(text: str, voice: str, out_mp3: Path):
+    word_boundaries = []
+    TICKS_PER_SEC = 10_000_000
+
+    with open(out_mp3, "wb") as f:
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                f.write(chunk["data"])
+            elif chunk["type"] == "WordBoundary":
+                w = chunk.get("text") or chunk.get("word") or ""
+                offset_s = float(chunk["offset"]) / TICKS_PER_SEC
+                dur_s    = float(chunk["duration"]) / TICKS_PER_SEC
+                word_boundaries.append({"text": w, "offset": offset_s, "duration": dur_s})
+
+    return _build_srt_from_boundaries(text, word_boundaries)
+
+def gen_tts_with_timings(text: str, voice: str, out_mp3: Path) -> tuple[Path, str | None]:
     """
-    1) If TTS_BACKEND=say -> use macOS 'say'
-    2) If TTS_BACKEND=edge -> force Edge-TTS
-    3) Else try Edge-TTS; on failure and if macOS, fall back to 'say'
+    Returns (mp3_path, srt_text_or_None).
+    - If Edge-TTS is used successfully: returns SRT text aligned to true timings.
+    - If macOS 'say' fallback is used: returns None (caller should fall back to even SRT).
     """
     backend = os.getenv("TTS_BACKEND", "").lower().strip()
     if backend == "say":
         if sys.platform != "darwin":
             raise RuntimeError("TTS_BACKEND=say requires macOS.")
         _tts_say(text, voice, out_mp3)
-        return
-    if backend == "edge":
-        asyncio.run(_tts_edge_async(text, voice, out_mp3))
-        return
-    # default: try edge then fallback on macOS
+        return out_mp3, None
+
+    # Try Edge-TTS first (either explicitly or default)
     try:
-        asyncio.run(_tts_edge_async(text, voice, out_mp3))
+        srt_text = asyncio.run(_edge_tts_stream_and_srt(text, voice, out_mp3))
+        return out_mp3, srt_text
     except Exception as e:
         print(f"[TTS] Edge-TTS failed ({e}).", file=sys.stderr)
+        if backend == "edge":
+            raise
         if sys.platform == "darwin":
             print("[TTS] Falling back to macOS 'say'.")
             _tts_say(text, voice, out_mp3)
+            return out_mp3, None
         else:
             raise
+
+# ---------- SRT helpers ----------
+def _split_sentences(text: str) -> list[str]:
+    sents = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
+    return sents or [text.strip()]
+
+def _tokenize(s: str) -> list[str]:
+    return re.findall(r"\S+", s)
+
+def _build_srt_from_boundaries(full_text: str, boundaries: list[dict]) -> str:
+    """
+    Convert Edge-TTS word boundaries to sentence-level SRT.
+    boundaries entries: {"offset": seconds, "duration": seconds, "text": "word"}
+    """
+    sentences = _split_sentences(full_text)
+    sent_tokens = [_tokenize(s) for s in sentences]
+    all_tokens = [tok for group in sent_tokens for tok in group]
+
+    # If mismatch, fall back to even SRT
+    if not boundaries or len(boundaries) < max(3, int(0.6 * len(all_tokens))):
+        return make_srt(full_text, TARGET_SECONDS)
+
+    n = min(len(all_tokens), len(boundaries))
+    token_times = [(b["offset"], b["offset"] + b["duration"]) for b in boundaries[:n]]
+
+    idx = 0
+    entries = []
+    for s_idx, toks in enumerate(sent_tokens, start=1):
+        if not toks:
+            continue
+        start_idx = idx
+        end_idx = min(idx + len(toks) - 1, n - 1)
+        start_t = token_times[start_idx][0]
+        end_t = token_times[end_idx][1]
+        idx = end_idx + 1
+        start_t = max(0.0, min(float(start_t), float(TARGET_SECONDS - 0.2)))
+        end_t   = max(start_t + 0.01, min(float(end_t), float(TARGET_SECONDS)))
+        entries.append((s_idx, start_t, end_t, sentences[s_idx-1]))
+
+    def fmt(t: float):
+        h = int(t // 3600); t -= h*3600
+        m = int(t // 60); t -= m*60
+        s = int(t); ms = int((t - s) * 1000)
+        return f"{h:02}:{m:02}:{s:02},{ms:03}"
+
+    lines = []
+    for i, start, end, sent in entries:
+        lines.append(f"{i}\n{fmt(start)} --> {fmt(end)}\n{sent}\n")
+    return "\n".join(lines)
+
+def make_srt(text: str, total_seconds: float) -> str:
+    chunks = [c.strip() for c in re.split(r'(?<=[.!?])\s+', text) if c.strip()]
+    if not chunks:
+        chunks = [text.strip()]
+    per = total_seconds / len(chunks)
+    def fmt(t: float):
+        h = int(t // 3600); t -= h*3600
+        m = int(t // 60); t -= m*60
+        s = int(t); ms = int((t - s) * 1000)
+        return f"{h:02}:{m:02}:{s:02},{ms:03}"
+    out = []
+    cur = 0.0
+    for i, c in enumerate(chunks, 1):
+        start = cur; end = min(total_seconds, cur + per)
+        out.append(f"{i}\n{fmt(start)} --> {fmt(end)}\n{c}\n")
+        cur = end
+    return "\n".join(out)
 
 # ---------- Pexels video search & download ----------
 def pexels_search_videos(api_key: str, query: str, per_page: int = 15) -> List[dict]:
@@ -191,25 +285,6 @@ def fetch_stock_clips(api_key: str, query: str, tmpdir: Path) -> List[Path]:
             continue
     return paths
 
-# ---------- Captions (SRT) ----------
-def make_srt(text: str, total_seconds: float) -> str:
-    chunks = [c.strip() for c in re.split(r'(?<=[.!?])\s+', text) if c.strip()]
-    if not chunks:
-        chunks = [text.strip()]
-    per = total_seconds / len(chunks)
-    def fmt(t: float):
-        h = int(t // 3600); t -= h*3600
-        m = int(t // 60); t -= m*60
-        s = int(t); ms = int((t - s) * 1000)
-        return f"{h:02}:{m:02}:{s:02},{ms:03}"
-    out = []
-    cur = 0.0
-    for i, c in enumerate(chunks, 1):
-        start = cur; end = min(total_seconds, cur + per)
-        out.append(f"{i}\n{fmt(start)} --> {fmt(end)}\n{c}\n")
-        cur = end
-    return "\n".join(out)
-
 # ---------- Build final video ----------
 def build_video(clips: List[Path], voice_mp3: Path, out_path: Path, bitrate: str = "3500k"):
     audio = AudioFileClip(str(voice_mp3))
@@ -234,7 +309,6 @@ def build_video(clips: List[Path], voice_mp3: Path, out_path: Path, bitrate: str
 
     video = concatenate_videoclips(vclips, method="compose").set_duration(target)
     final = video.set_audio(audio)
-
     final.write_videofile(str(out_path), codec="libx264", audio_codec="aac", fps=30, bitrate=bitrate)
 
     # Cleanup
@@ -245,6 +319,32 @@ def build_video(clips: List[Path], voice_mp3: Path, out_path: Path, bitrate: str
     except: pass
     try: video.close()
     except: pass
+
+# ---------- Burn-in subtitles with ffmpeg ----------
+def burn_in_subtitles(in_mp4: Path, srt_path: Path, out_mp4: Path | None = None) -> Path:
+    """
+    Uses ffmpeg subtitles filter (libass) to burn SRT onto the video.
+    If SRT_STYLE is set, apply basic styling via force_style.
+    """
+    srt_escaped = str(srt_path).replace("\\", "/")
+    vf = f"subtitles='{srt_escaped}'"
+    if SRT_STYLE:
+        vf = f"subtitles='{srt_escaped}':force_style='{SRT_STYLE}'"
+
+    if out_mp4 is None:
+        out_mp4 = in_mp4.with_name(in_mp4.stem + "_subbed.mp4")
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(in_mp4),
+        "-vf", vf,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+        "-c:a", "aac",
+        "-movflags", "+faststart",
+        str(out_mp4),
+    ]
+    subprocess.run(cmd, check=True)
+    return out_mp4
 
 # ---------- Telegram sending ----------
 def load_subscribers(subscribers_file: Path) -> list[int]:
@@ -306,6 +406,14 @@ def main():
     bitrate = os.getenv("EXPORT_BITRATE", "3500k")
     target_chat = os.getenv("TARGET_CHAT", "").strip()
 
+    # Caption toggles
+    captions_mode = os.getenv("CAPTIONS_MODE", "burn").lower().strip()   # burn|sidecar|both
+    send_variant = os.getenv("SEND_VARIANT", "").lower().strip()         # burned|plain
+    if send_variant not in ("burned", "plain", ""):
+        send_variant = ""
+    if captions_mode not in ("burn", "sidecar", "both"):
+        captions_mode = "burn"
+
     ensure_dir(outdir)
     work = Path(tempfile.mkdtemp(prefix="dailyvid_"))
 
@@ -318,9 +426,9 @@ def main():
         script = gen_script_ollama(topic, ollama_url, model)
         (outdir / f"script_{date}.txt").write_text(script, encoding="utf-8")
 
-        # 2) TTS
+        # 2) TTS (returns optional, perfectly-synced SRT text when Edge-TTS is used)
         voice_mp3 = work / f"voice_{date}.mp3"
-        gen_tts(script, voice, voice_mp3)
+        voice_mp3, srt_from_tts = gen_tts_with_timings(script, voice, voice_mp3)
 
         # 3) Download stock videos
         query = topic.split(":")[0].split("—")[0]
@@ -331,16 +439,41 @@ def main():
             raise RuntimeError("No clips found from Pexels API.")
 
         # 4) Build video
-        out_mp4 = outdir / f"{base_slug}.mp4"
-        build_video(clips, voice_mp3, out_mp4, bitrate=bitrate)
+        out_plain = outdir / f"{base_slug}.mp4"
+        build_video(clips, voice_mp3, out_plain, bitrate=bitrate)
 
-        # 5) Captions
-        srt = make_srt(script, TARGET_SECONDS)
-        (outdir / f"{base_slug}.srt").write_text(srt, encoding="utf-8")
+        # 5) Captions (always write sidecar SRT)
+        srt_text = srt_from_tts if srt_from_tts else make_srt(script, TARGET_SECONDS)
+        srt_path = outdir / f"{base_slug}.srt"
+        srt_path.write_text(srt_text, encoding="utf-8")
 
-        print(f"✅ Generated: {out_mp4}")
+        # 6) Burn (optional, based on CAPTIONS_MODE)
+        out_burned = None
+        if captions_mode in ("burn", "both"):
+            try:
+                out_burned = burn_in_subtitles(out_plain, srt_path)
+                print(f"✅ Burned captions: {out_burned}")
+            except subprocess.CalledProcessError as e:
+                print(f"[WARN] Burn-in failed (ffmpeg). Sending plain video instead. Error: {e}", file=sys.stderr)
 
-        # 6) Broadcast via Telegram
+        # Choose which file to send
+        if not send_variant:
+            # Auto default: if we have burned or chose burn mode, prefer burned; else plain
+            if out_burned and captions_mode in ("burn", "both"):
+                chosen = out_burned
+            else:
+                chosen = out_plain
+        else:
+            chosen = out_burned if (send_variant == "burned" and out_burned) else out_plain
+
+        # Status
+        print(f"✅ Generated (plain): {out_plain}")
+        print(f"✅ Generated SRT: {srt_path}")
+        if out_burned:
+            print(f"✅ Generated (burned): {out_burned}")
+        print(f"➡️  Will send: {chosen}")
+
+        # 7) Broadcast via Telegram
         if not token:
             print("No TELEGRAM_BOT_TOKEN set; skipping Telegram send.")
         else:
@@ -348,15 +481,14 @@ def main():
 
             # subscribers (from /subscribe)
             subs = load_subscribers(subs_file)
-            broadcast_video(token, subs, out_mp4, caption=caption)
+            broadcast_video(token, subs, chosen, caption=caption)
 
             # explicit targets (channels/groups)
             if target_chat:
-                send_to_targets(token, target_chat, out_mp4, caption=caption)
+                send_to_targets(token, target_chat, chosen, caption=caption)
 
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
 if __name__ == "__main__":
     main()
-

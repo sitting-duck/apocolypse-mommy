@@ -1,6 +1,12 @@
 # apocolypse-mommy
 # Telegram Bot (FastAPI Webhooks) + ngrok + Ollama (Streaming)
 
+apocolypse-mommy gives prepping advice. preppers buy a lot of shit so thos niche is very monetization and the current social climate is pretty much perfect for capitalizing on paranoia. 
+
+Honey currently casually drops affiliate links to Amazon products. 
+
+migration to Instagram and ports Windows and Linux coming soon.
+
 This repo serves as the backend code for Honey the Apocolypse Bot. She gives advice on how to survive the apocalypse in a pinch okay sugar? Talk to Honey at [t.me/honey_apocalypse_bot](https://t.me/honey_apocalypse_bot)
 
 This guide walks you from **zero → a live Telegram bot** that answers using a **local Ollama model**, with **webhook delivery**, **ngrok tunnel**, and **streaming replies** for snappy UX.

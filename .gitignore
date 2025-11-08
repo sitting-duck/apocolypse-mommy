@@ -1,3 +1,7 @@
+# reranker
+reranker/checkpoints/
+reranker/data/
+
 # video
 video/daily_videos/
 

@@ -67,7 +67,7 @@ Fill out the form and click the "Create Bot" button pictured above. <br>
 <img width="401" height="442" alt="image" src="https://github.com/user-attachments/assets/3765bff1-fa9e-4722-b2e2-a4b6db7ef703" /><br>
 Click the copy button to copy your telegram bot token and paste into your .env file for `TELEGRAM_BOT_TOKEN`. 
 
-## Run everything (2 terminals)
+## Run everything (3 terminals)
 
 ### Terminal A - NGROK Endpoint
 ```bash

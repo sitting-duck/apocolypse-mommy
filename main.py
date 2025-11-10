@@ -3,6 +3,12 @@
 #         + subscriber management (/subscribe, /unsubscribe)
 #         + analytics logging (interactions, affiliate impressions, system)
 
+# --- RAG imports ---
+import asyncio
+from retriever_bm25 import load_index, retrieve
+from reranker_ce import RerankerCE
+
+
 import os, json, logging
 from time import monotonic
 from contextlib import asynccontextmanager
@@ -47,6 +53,56 @@ MAX_TOTAL_CHARS = int(os.environ.get("MAX_TOTAL_CHARS", "3500"))
 # NEW: where to store subscribers.json (shared with the video generator repo)
 # e.g., /Users/ashley/Documents/Github/apocolypse-mommy-video-generator/subscribers.json
 SUBSCRIBERS_FILE = Path(os.environ.get("SUBSCRIBERS_FILE", "subscribers.json"))
+
+# --- RAG config (ADD) ---
+USE_RAG          = os.getenv("USE_RAG", "1") == "1"
+BM25_INDEX_PATH  = os.getenv("BM25_INDEX_PATH", "data/bm25.idx")
+RERANKER_PATH    = os.getenv("RERANKER_PATH", "checkpoints/my-cross-encoder")
+BM25_TOPK        = int(os.getenv("BM25_TOPK", "50"))
+RERANK_TOPN      = int(os.getenv("RERANK_TOPN", "3"))
+CTX_JOINER       = os.getenv("CTX_JOINER", "\n\n---\n\n")
+MAX_PASSAGE_CHARS = int(os.getenv("MAX_PASSAGE_CHARS", "1500"))
+
+# Lazy singletons
+_bm25 = None
+_docs = None
+_reranker = None
+
+def _lazy_load_rag():
+    global _bm25, _docs, _reranker
+    if _bm25 is None or _docs is None:
+        _bm25, _docs = load_index(BM25_INDEX_PATH)
+        logging.info("RAG: loaded BM25 index (%d docs) from %s", len(_docs), BM25_INDEX_PATH)
+    if _reranker is None:
+        _reranker = RerankerCE(RERANKER_PATH, batch_size=64, device=None)
+        logging.info("RAG: loaded Cross-Encoder from %s", RERANKER_PATH)
+
+async def build_context_for(query: str) -> str | None:
+    """Retrieve → rerank → join top passages into a compact context block."""
+    _lazy_load_rag()
+    loop = asyncio.get_running_loop()
+
+    # 1) lexical retrieve
+    candidates = await loop.run_in_executor(None, lambda: retrieve(query, _bm25, _docs, top_k=BM25_TOPK))
+    if not candidates:
+        return None
+
+    # 2) cross-encoder rerank
+    reranked = await loop.run_in_executor(None, lambda: _reranker.score(query, candidates))
+    topn = reranked[:RERANK_TOPN]
+    if not topn:
+        return None
+
+    # 3) format compact context
+    chunks = []
+    for i, d in enumerate(topn, 1):
+        title = (d.get("title") or "").strip()
+        header = f"[{i}] {title}" if title else f"[{i}]"
+        text = (d.get("text") or "").strip()
+        if MAX_PASSAGE_CHARS > 0 and len(text) > MAX_PASSAGE_CHARS:
+            text = text[:MAX_PASSAGE_CHARS]
+        chunks.append(f"{header}\n{text}")
+    return CTX_JOINER.join(chunks) if chunks else None
 
 # --- Build PTB app ---
 tg_app = Application.builder().token(BOT_TOKEN).build()
@@ -243,11 +299,31 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Prefer short bullets for steps; avoid long stories."
     )
 
+    # 💡 Build optional RAG context
+    prompt = user_text
+    if USE_RAG:
+        try:
+            context_block = await build_context_for(user_text)
+        except Exception:
+            logging.exception("RAG context build failed")
+            context_block = None
+
+        if context_block:
+            prompt = (
+                "Use the following context to answer the question. "
+                "If the context is insufficient, say you don't know.\n\n"
+                f"Context:\n{context_block}\n\n"
+                f"Question: {user_text}"
+            )
+
+
     # NEW: start timing for analytics
     start_ts = monotonic()
 
     try:
-        async for chunk in stream_ollama(user_text, sys_prompt=concise_sys_prompt):
+        #async for chunk in stream_ollama(user_text, sys_prompt=concise_sys_prompt):
+        async for chunk in stream_ollama(prompt, sys_prompt=concise_sys_prompt):
+
             buffer += chunk
 
             # stop early if getting too long; avoids giant edits & 4096 cap

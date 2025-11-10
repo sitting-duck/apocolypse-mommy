@@ -1,5 +1,9 @@
+# reranker
+reranker/checkpoints/
+reranker/data/
+
 # video
-daily_videos/
+video/daily_videos/
 
 #analytics file
 analytics/events.jsonl

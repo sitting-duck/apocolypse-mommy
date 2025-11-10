@@ -1,7 +1,7 @@
 # apocolypse-mommy
 # Telegram Bot (FastAPI Webhooks) + ngrok + Ollama (Streaming)
 
-apocolypse-mommy gives prepping advice. preppers buy a lot of shit so thos niche is very monetization and the current social climate is pretty much perfect for capitalizing on paranoia. 
+apocolypse-mommy gives prepping advice. preppers buy a lot of shit so this niche is very monetization and the current social climate is pretty much perfect for capitalizing on paranoia. 
 
 Honey currently casually drops affiliate links to Amazon products. 
 

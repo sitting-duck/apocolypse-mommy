@@ -83,7 +83,7 @@ Copy the **https** URL it prints (e.g., `https://xyz.ngrok.app`) and paste it in
 ### Terminal C — run your app
 ```bash
 scripts/register_webhook.sh
-scripts/run_app.sh
+source scripts/run_app.sh
 ```
 
 ## 6) Test in Telegram

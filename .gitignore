@@ -1,12 +1,8 @@
 # reranker
-reranker/checkpoints/
+# checkpoints/*.safetensors are tracked with Git LFS
 reranker/data/
 
-# video
-video/daily_videos/
-
 #analytics file
-analytics/events.jsonl
 charts/
 
 .venv/
